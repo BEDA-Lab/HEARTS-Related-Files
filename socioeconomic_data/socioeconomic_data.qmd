@@ -14,13 +14,12 @@ editor: visual
 library(tidycensus)
 library(tidyverse)
 library(reactable)
-library(labelled)
+library(here)
 library(htmlwidgets)
 library(htmltools)
 library(knitr)
 
 
-# api_key <- Sys.getenv("CENSUS_API_KEY")
 ```
 
 ## American Community Survey 5-Year Data (2020-2024)
@@ -31,6 +30,8 @@ The ACS 5-year data for 2020-2024 was released on 01-29-2026^[1](https://www.cen
 \**Note*: Census Bureau API keys can be requested [here](https://api.census.gov/data/key_signup.html). If you are trying to replicate this code and are running into issues, double check that you have an API key from the Census Bureau and that it has been added to your .Renviron by running the following:
 
 |           \> tidycensus::census_api_key(key = \[**YOUR_API_KEY**\]))
+
+R should implicitly reference this when making tidycensus api calls, but for added assurance, you can add your api key to an \_environment.local file.
 :::
 
 ::: {.content-visible when-format="html"}
@@ -96,12 +97,13 @@ reactable(acs24,
           )
 
 ```
-
+:::
 
 ## Decennial Census (2020)
 
-::: {.content-visible when-format="html"}
+Demographic and Housing Characteristics file. Explored these data to see if maybe there was more specific housing data available.
 
+::: {.content-visible when-format="html"}
 ```{r}
 #| label: dhc_data
 #| output: true
@@ -330,7 +332,7 @@ gc()
 
 - B25001_001 (Housing Units \| block group)
 
-Another potential dataset is **P16_001N-P16_009N** (Household type) from the Demographic History Sample (DHS) portion of the 2020 Decennial Survey (i.e., variables are things like 'married couple family'; 'nonfamily households' etc.). If we are looking for data more similar to building type, that exists already in our NSI datasets.
+Another potential dataset is **P16_001N-P16_009N** (Household type) from the Demographic History Sample (DHS) portion of the 2020 Decennial Survey (i.e., variables are things like 'married couple family'; 'non-family households' etc.). If we are looking for data more similar to building type, that exists already in our NSI datasets.
 
 ***Please let me know if I need to get a different dataset for this.***
 
@@ -387,11 +389,15 @@ gc()
 
 ### Food deserts
 
-Data related to food deserts were downloaded directly from the USDA's website\^[2](https://www.ers.usda.gov/data-products/food-access-research-atlas/download-the-data). This dataset was last updated 04-27-2021.
+Data related to food deserts were downloaded directly from the USDA's website^[2](https://www.ers.usda.gov/data-products/food-access-research-atlas/download-the-data)^. This dataset was last updated 04-27-2021.
 
 ```{r}
 #| label: food_deserts
 #| output: true
+
+food_deserts <- read.csv(here("01_data/2019_Food_Access_Research_Atlas_Data", "FARA.csv"), header = T, encoding = "UTF-8")
+readme <- read.csv(here("01_data/2019_Food_Access_Research_Atlas_Data", "ReadMe.csv"))
+var_lookup <- read.csv(here("01_data/2019_Food_Access_Research_Atlas_Data", "VariableLookup.csv"))
 
 ```
 
@@ -401,4 +407,3 @@ Data related to food deserts were downloaded directly from the USDA's website\^[
 
 ```
 :::
-
