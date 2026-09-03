@@ -1,0 +1,7 @@
+install.packages("tidycensus")
+install.packages("tidyverse")
+install.packages("reactable")
+install.packages("labelled")
+install.packages("htmlwidgets")
+install.packages("htmltools")
+install.packages("knitr")

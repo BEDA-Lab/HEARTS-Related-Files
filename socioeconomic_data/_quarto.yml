@@ -1,0 +1,23 @@
+project:
+  type: default
+
+
+title: "Socioeconomic Data Exploration & Download"
+author: "Alexis Korotasz"
+date: last-modified
+date-format: "[Last updated on] MMMM DD, YYYY"
+code-links: binder
+
+format: 
+  html:
+    theme:  flatly
+    toc: true
+    toc-title: Contents
+    toc-depth: 5
+    code-fold: true
+    page-layout: full
+
+
+
+
+

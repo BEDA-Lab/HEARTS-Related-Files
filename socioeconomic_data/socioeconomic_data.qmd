@@ -1,0 +1,408 @@
+---
+knitr:
+  opts_chunk: 
+    collapse: true
+    cache: true
+editor: visual
+---
+
+```{r}
+#| label: setup
+#| echo: false
+#| output: false
+
+library(tidycensus)
+library(tidyverse)
+library(reactable)
+library(labelled)
+library(htmlwidgets)
+library(htmltools)
+library(knitr)
+
+
+# api_key <- Sys.getenv("CENSUS_API_KEY")
+```
+
+## American Community Survey 5-Year Data (2020-2024)
+
+The ACS 5-year data for 2020-2024 was released on 01-29-2026^[1](https://www.census.gov/programs-surveys/acs/news/data-releases/2024/release-schedule.html)^. The interactive table below allows you to easily search through available datasets. Values from the **'Dataset ID'** column will be used to query the U.S. Census Bureau API\* in subsequent code chunks.
+
+::: {style="font-size: 0.85em;"}
+\**Note*: Census Bureau API keys can be requested [here](https://api.census.gov/data/key_signup.html). If you are trying to replicate this code and are running into issues, double check that you have an API key from the Census Bureau and that it has been added to your .Renviron by running the following:
+
+|           \> tidycensus::census_api_key(key = \[**YOUR_API_KEY**\]))
+:::
+
+::: {.content-visible when-format="html"}
+```{r}
+#| label: acs_data
+#| output: true
+
+## Get 2024 ACS 5-year estimates
+acs24 <- load_variables(2024, "acs5") |> 
+  relocate(c("name", "concept"), .before = "label")
+
+
+## create function for dropdown filter to use in reactable
+filter_fct <- function(values, name) {
+  tags$select(
+    tags$option(value = "", "All"),
+    purrr::map(unique(values), tags$option),
+    onchange = glue::glue(
+      "Reactable.setFilter(
+        'my-tbl', // Modify id again
+        '{name}', 
+        event.target.value  
+      )"
+    ),
+    style = "width: 100%; height: 28px;" # Add this line
+  )
+}
+
+## Generate interactive table
+reactable(acs24, 
+          defaultColDef = colDef(
+            header = function(value) gsub(".", " ", value, fixed = TRUE),
+            cell = function(value) format(value, nsmall = 1),
+            align = "left",
+            headerStyle = list(background = "#F1F3F4")),
+          theme = reactableTheme(
+            highlightColor = "#D7E5F0",
+            style = list(fontFamily = "-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif"),
+            searchInputStyle = list(width = "100%")),
+          groupBy = "concept", 
+          columns = list(
+            name = colDef(name = "Dataset ID",
+                          sticky = "left",
+                          filterInput = filter_fct),
+            concept = colDef(name = "Dataset name",
+                             sticky = "left",
+                             filterInput = filter_fct,
+                             minWidth = 200),
+            label = colDef(name = "Description",
+                           minWidth = 100),
+            geography = colDef(name = "Spatial scale",
+                               aggregate = "unique", 
+                               filterInput = filter_fct)),
+          filterable = TRUE,
+          highlight = TRUE,
+          elementId = "my-tbl",
+          searchable = TRUE,
+          compact = TRUE,
+          width = "100%",
+          paginationType = "jump",
+          minRows = 10,
+          showPageSizeOptions = TRUE
+          )
+
+```
+
+
+## Decennial Census (2020)
+
+::: {.content-visible when-format="html"}
+
+```{r}
+#| label: dhc_data
+#| output: true
+
+dhc20 <- load_variables(2020, "dhc") |> 
+  relocate(c("name", "concept"), .before = "label")
+
+
+## create function for dropdown filter to use in reactable
+filter_fct <- function(values, name) {
+  tags$select(
+    tags$option(value = "", "All"),
+    purrr::map(unique(values), tags$option),
+    onchange = glue::glue(
+      "Reactable.setFilter(
+        'my-tbl2', // Modify id again
+        '{name}', 
+        event.target.value  
+      )"
+    ),
+    style = "width: 100%; height: 28px;" # Add this line
+  )
+}
+
+## Generate interactive table
+reactable(dhc20, 
+          defaultColDef = colDef(
+            header = function(value) gsub(".", " ", value, fixed = TRUE),
+            cell = function(value) format(value, nsmall = 1),
+            align = "left",
+            headerStyle = list(background = "#F1F3F4")),
+          theme = reactableTheme(
+            highlightColor = "#D7E5F0",
+            style = list(fontFamily = "-apple-system, BlinkMacSystemFont, Segoe UI, Helvetica, Arial, sans-serif"),
+            searchInputStyle = list(width = "100%")),
+          groupBy = "concept", 
+          columns = list(
+            name = colDef(name = "Dataset ID",
+                          sticky = "left",
+                          filterInput = filter_fct),
+            concept = colDef(name = "Dataset name",
+                             sticky = "left",
+                             filterInput = filter_fct,
+                             minWidth = 200),
+            label = colDef(name = "Description",
+                           minWidth = 200)),
+          filterable = TRUE,
+          highlight = TRUE,
+          elementId = "my-tbl2",
+          searchable = TRUE,
+          compact = TRUE,
+          width = "100%",
+          paginationType = "jump",
+          minRows = 10,
+          showPageSizeOptions = TRUE
+          )
+```
+:::
+
+## Socioeconomic variables of interest
+
+From searching the tables above, the following datasets were chosen:
+
+::: panel-tabset
+### Race/ethnicity
+
+- B02001 (Race \| block group)
+
+```{r}
+#| label: race_and_ethnicity
+#| output: true
+
+## Create labels for dataset variables
+col_names <- acs24 |> 
+  filter(concept == "Race") |> 
+  separate_wider_delim(cols = label, 
+                       delim = "!!", 
+                       names = c("estimate", "var", "var_label"),
+                       too_few = "align_end", too_many = "merge") |> 
+  mutate(var_label = case_when(var_label == "Total:" ~ "Total",
+                           var_label == "Two or More Races:" ~ "Two or More Races",
+                           var_label == "Two or More Races:!!Two races including Some Other Race" ~ "Two races including Some Other Race",
+                           var_label == "Two or More Races:!!Two races excluding Some Other Race, and three or more races" ~ "Two races excluding Some Other Race, and three or more races",
+                           TRUE ~ var_label)) |> 
+  subset(select = -c(concept, estimate, var, geography)) |> 
+  rename(variable = name)
+
+dict <- setNames(col_names$var_label, col_names$variable)
+
+## Get ACS dataset of interest
+race_IN <- get_acs(geography = "block group",
+                table = "B02001",
+                year = 2024,
+                state = "Indiana",
+                survey = "acs5") |> 
+  separate_wider_delim(cols = NAME, 
+                       delim = ";", 
+                       names = c("block_group", "census_tract", "county", "state"),
+                       too_few = "error", too_many = "error",
+                       cols_remove = TRUE) |> 
+  mutate(var_label = recode(variable, !!!dict)) |> 
+  relocate(var_label, .after = variable)
+
+race_CA <- get_acs(geography = "block group",
+                table = "B02001",
+                year = 2024,
+                state = "California",
+                survey = "acs5") |> 
+  separate_wider_delim(cols = NAME, 
+                       delim = ";", 
+                       names = c("block_group", "census_tract", "county", "state"),
+                       too_few = "error", too_many = "error",
+                       cols_remove = TRUE) |> 
+  mutate(var_label = recode(variable, !!!dict)) |> 
+  relocate(var_label, .after = variable)
+
+
+#dir <- file.path(dirname(rstudioapi::getActiveDocumentContext()$path))
+#out_path <- file.path(dir, path.expand("outputs"))
+#dir.create(out_path)
+
+rm(col_names, dict)
+```
+
+### Income
+
+- B19013_001 (Income \| block group)
+
+```{r}
+#| label: median_income
+#| output: true
+
+col_names <- acs24 |> 
+  filter(name == "B19013_001") |> 
+  rename(variable = name,
+         var_label = concept)
+
+dict <- setNames(col_names$var_label, col_names$variable)
+
+## Get ACS dataset of interest
+income_IN <- get_acs(geography = "block group",
+                table = "B19013",
+                year = 2024,
+                state = "Indiana",
+                survey = "acs5") |> 
+  separate_wider_delim(cols = NAME, 
+                       delim = ";", 
+                       names = c("block_group", "census_tract", "county", "state"),
+                       too_few = "error", too_many = "error",
+                       cols_remove = TRUE) |> 
+  mutate(var_label = recode(variable, !!!dict)) |> 
+  relocate(var_label, .after = variable)
+
+income_CA <- get_acs(geography = "block group",
+                table = "B19013",
+                year = 2024,
+                state = "California",
+                survey = "acs5") |> 
+  separate_wider_delim(cols = NAME, 
+                       delim = ";", 
+                       names = c("block_group", "census_tract", "county", "state"),
+                       too_few = "error", too_many = "error",
+                       cols_remove = TRUE) |> 
+  mutate(var_label = recode(variable, !!!dict)) |> 
+  relocate(var_label, .after = variable)
+
+rm(col_names, dict)
+gc()
+```
+
+### Median age
+
+- B01002 (Median age by sex \| block group)
+
+```{r}
+#| label: median_age_by_sex
+#| output: true
+
+## Median age by sex
+col_names <- acs24 |> 
+  filter(str_detect(name, "B01002_")) |> 
+  separate_wider_delim(cols = label, 
+                       delim = "!!", 
+                       names = c("estimate", "var", "var_label"),
+                       too_few = "align_end", too_many = "merge") |> 
+  mutate(var_label = case_when(var_label == "Total:" ~ "Total",
+                               TRUE ~ var_label)) |> 
+  subset(select = -c(concept, estimate, var, geography)) |> 
+  rename(variable = name)
+
+  
+dict <- setNames(col_names$var_label, col_names$variable)
+
+## Get ACS dataset of interest
+age_IN <- get_acs(geography = "block group",
+                table = "B01002",
+                year = 2024,
+                state = "Indiana",
+                survey = "acs5") |> 
+  separate_wider_delim(cols = NAME, 
+                       delim = ";", 
+                       names = c("block_group", "census_tract", "county", "state"),
+                       too_few = "error", too_many = "error",
+                       cols_remove = TRUE) |> 
+  mutate(var_label = recode(variable, !!!dict)) |> 
+  relocate(var_label, .after = variable)
+
+age_CA <- get_acs(geography = "block group",
+                table = "B01002",
+                year = 2024,
+                state = "California",
+                survey = "acs5") |> 
+  separate_wider_delim(cols = NAME, 
+                       delim = ";", 
+                       names = c("block_group", "census_tract", "county", "state"),
+                       too_few = "error", too_many = "error",
+                       cols_remove = TRUE) |> 
+  mutate(var_label = recode(variable, !!!dict)) |> 
+  relocate(var_label, .after = variable)
+
+rm(col_names, dict)
+gc()
+```
+
+### Single family households
+
+- B25001_001 (Housing Units \| block group)
+
+Another potential dataset is **P16_001N-P16_009N** (Household type) from the Demographic History Sample (DHS) portion of the 2020 Decennial Survey (i.e., variables are things like 'married couple family'; 'nonfamily households' etc.). If we are looking for data more similar to building type, that exists already in our NSI datasets.
+
+***Please let me know if I need to get a different dataset for this.***
+
+```{r}
+#| label: housing_units
+#| output: true
+
+col_names <- acs24 |> 
+  filter(str_detect(name, "B25001_")) |>  
+  rename(variable = name,
+         var_label = concept)
+
+  
+dict <- setNames(col_names$var_label, col_names$variable)
+
+## Get ACS dataset of interest
+housing_units_IN <- get_acs(geography = "block group",
+                table = "B25001",
+                year = 2024,
+                state = "Indiana",
+                survey = "acs5") |> 
+  separate_wider_delim(cols = NAME, 
+                       delim = ";", 
+                       names = c("block_group", "census_tract", "county", "state"),
+                       too_few = "error", too_many = "error",
+                       cols_remove = TRUE) |> 
+  mutate(var_label = recode(variable, !!!dict)) |> 
+  relocate(var_label, .after = variable)
+
+housing_units_CA <- get_acs(geography = "block group",
+                table = "B25001",
+                year = 2024,
+                state = "California",
+                survey = "acs5") |> 
+  separate_wider_delim(cols = NAME, 
+                       delim = ";", 
+                       names = c("block_group", "census_tract", "county", "state"),
+                       too_few = "error", too_many = "error",
+                       cols_remove = TRUE) |> 
+  mutate(var_label = recode(variable, !!!dict)) |> 
+  relocate(var_label, .after = variable)
+
+rm(col_names, dict)
+gc()
+```
+
+### Population density
+
+```{r}
+#| label: population_density
+#| output: true
+
+```
+
+### Food deserts
+
+Data related to food deserts were downloaded directly from the USDA's website\^[2](https://www.ers.usda.gov/data-products/food-access-research-atlas/download-the-data). This dataset was last updated 04-27-2021.
+
+```{r}
+#| label: food_deserts
+#| output: true
+
+```
+
+### Green space
+
+```{r}
+
+```
+:::
+
+| Population density \| \| \|
+| Food deserts (double check we have this - old FDA project) \| \| \|
+| Green space \| \| \|
+| Social vulnerability index (if it still exists) \| \| \|
