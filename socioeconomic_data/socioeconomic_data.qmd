@@ -402,7 +402,3 @@ Data related to food deserts were downloaded directly from the USDA's website\^[
 ```
 :::
 
-| Population density \| \| \|
-| Food deserts (double check we have this - old FDA project) \| \| \|
-| Green space \| \| \|
-| Social vulnerability index (if it still exists) \| \| \|
