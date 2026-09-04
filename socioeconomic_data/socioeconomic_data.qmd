@@ -3,6 +3,7 @@ knitr:
   opts_chunk: 
     collapse: true
     cache: true
+    message: false
 editor: visual
 ---
 
@@ -15,6 +16,7 @@ library(tidycensus)
 library(tidyverse)
 library(reactable)
 library(sf)
+library(arrow)
 library(here)
 library(htmlwidgets)
 library(htmltools)
@@ -24,6 +26,9 @@ library(knitr)
 options(tigris_use_cache = TRUE)
 ```
 
+# Census Bureau data
+
+:::::: panel-tabset
 ## American Community Survey 5-Year Data (2020-2024)
 
 The ACS 5-year data for 2020-2024 was released on 01-29-2026^[1](https://www.census.gov/programs-surveys/acs/news/data-releases/2024/release-schedule.html)^. The interactive table below allows you to easily search through available datasets. Values from the **'Dataset ID'** column will be used to query the U.S. Census Bureau API\* in subsequent code chunks.
@@ -164,36 +169,20 @@ reactable(dhc20,
           )
 ```
 :::
+::::::
 
-## Socioeconomic variables of interest
+# Socioeconomic variables of interest
 
 From searching the tables above, the following datasets were chosen:
 
-#::: panel-tabset
-### Race/ethnicity
-
-- B02001 (Race \| block group)
-
+## Race/ethnicity (B02001; Race \| census tract)
 
 ```{r}
-#| label: race_and_ethnicity_TEST
-#| output: false
+#| label: race_and_ethnicity
+#| output: true
 
 ## List of states to iterate through
 states <- state.name
-
-## Loop through each state and merge the tract data
-race_data <- map_dfr(states, function(st) {
-  get_acs(geography = "block group",
-          table = "B02001", # Race
-          state = st,
-          year = 2024,
-          summary_var = "B02001_001",
-          geometry = T, 
-          keep_geo_vars = T
-          )
-  },
-  .progress = T)
 
 ## Create labels for dataset variables
 col_names <- acs24 |> 
@@ -212,70 +201,105 @@ col_names <- acs24 |>
 
 dict <- setNames(col_names$var_label, col_names$variable)
 
-race_data <- race_data |> 
-  separate_wider_delim(cols = NAME, 
-                       delim = ";", 
-                       names = c("block_group", "census_tract", "county", "state"),
-                       too_few = "error", too_many = "error",
-                       cols_remove = TRUE) |> 
+
+## Loop through each state and merge the tract data
+race <- map_dfr(states, function(st) {
+  get_acs(geography = "tract",
+          table = "B02001", # Race
+          state = st,
+          year = 2024,
+          summary_var = "B02001_001",
+          geometry = T, 
+          keep_geo_vars = T
+          )
+  },
+  .progress = T) |> 
+  # remove redundant vars
+  dplyr::select(-c(NAME.x, NAME.y, GEOIDFQ, LSAD, STUSPS)) |> 
+  # label intuitively
+  rename(state_fips = STATEFP,
+         county_fips = COUNTYFP,
+         census_tract_fips = TRACTCE,
+         census_tract = NAMELSAD,
+         county = NAMELSADCO,
+         state = STATE_NAME,
+         total_est = summary_est,
+         total_moe = summary_moe) |>
+  relocate(GEOID, .before = state_fips) |> 
+  relocate(c(state, county), .before = census_tract) |> 
+  relocate(c(ALAND, AWATER), .before = geometry) |> 
   mutate(var_label = recode(variable, !!!dict)) |> 
   relocate(var_label, .after = variable) |> 
-  mutate(across(everything(), \(x) trimws(x, which = "both"))) |> 
   filter(var_label != "Total")
 
 
+## Save data in .gpkg and as parquet file -- commented out here to run code more easily
+# st_write(race, here("02_outputs", "socioeconomic_data.gpkg"), layer = "race_B02001")
+
+# st_drop_geometry(race) |> 
+#   write_parquet(here("02_outputs", "race_all.parquet"))
+
+## Save CA and IN separately
+# st_drop_geometry(race) |>
+#   filter(state == "Indiana") |>
+#   write_parquet(here("02_outputs", "race_IN.parquet"))
+# 
+# st_drop_geometry(race) |>
+#   filter(state == "California") |>
+#   write_parquet(here("02_outputs", "race_CA.parquet"))
+
 ```
 
-#### Summary Table
+- Data for the whole U.S. at the tract level is available as a .gpkg and a parquet file.
 
-#### Map Overview
+#### \> Consolidate groups
+
 ```{r}
-race_data |>
-  mutate(percent = 100 * (estimate / summary_estimate)) |>
-  ggplot(aes(fill = percent, colour = )) +
-  facet_wrap(~variable) +
-  geom_sf(color = NA) +
-  theme_void() + 
-  scale_fill_viridis_c() + 
-  labs(fill = "% of population\n(2020 Census)")
+#| label: race_simplified
+
+race_simplified <- race |> 
+  mutate(var_label = case_when(var_label == "White alone" ~ "White",
+                               var_label == "Black or African American alone" ~ "Black",
+                               var_label == "American Indian and Alaska Native alone" ~ "Indigenous",
+                               var_label == "Asian alone" ~ "Asian",
+                               TRUE ~ "Other")) |>
+  dplyr::select(-(variable)) |> 
+  group_by(census_tract, var_label) |> 
+  
+  # Pretty sure this isn't a great way of doing this but let me know. Need to figure something else out.
+  mutate(estimate = mean(estimate),
+         moe = mean(moe),
+         total_est = mean(total_est),
+         total_moe =  mean(total_moe),
+         ALAND = mean(ALAND),
+         AWATER = mean(AWATER)) 
+
+
+# |> 
+#   distinct()
+
+rm(race) # added this to free up memory
+
+
+## In progress -- ignore
+# indiana_cali <- race_simplified |> 
+#   filter(state == "Indiana" | state == "California") |> 
+#   group_by(census_tract, var_label) |> 
+#   mutate(estimate = mean(estimate),
+#          moe = mean(moe),
+#          total_est = mean(total_est),
+#          total_moe =  mean(total_moe),
+#          ALAND = mean(ALAND),
+#          AWATER = mean(AWATER)) |> 
+#   distinct() |> 
+#   mutate(proportion = round(estimate/total_est), 2)
+
+rm(race, race_simplified, col_names, dict)
+gc()
+
 ```
 
-```{r}
-#| label: race_and_ethnicity
-#| output: true
-
-
-## Get ACS dataset of interest
-race_IN <- get_acs(geography = "block group",
-                table = "B02001",
-                year = 2024,
-                state = "Indiana",
-                survey = "acs5") 
-
-race_CA <- get_acs(geography = "block group",
-                table = "B02001",
-                year = 2024,
-                state = "California",
-                survey = "acs5") |> 
-  separate_wider_delim(cols = NAME, 
-                       delim = ";", 
-                       names = c("block_group", "census_tract", "county", "state"),
-                       too_few = "error", too_many = "error",
-                       cols_remove = TRUE) |> 
-  mutate(var_label = recode(variable, !!!dict)) |> 
-  relocate(var_label, .after = variable)
-
-
-#dir <- file.path(dirname(rstudioapi::getActiveDocumentContext()$path))
-#out_path <- file.path(dir, path.expand("outputs"))
-#dir.create(out_path)
-
-rm(col_names, dict)
-```
-
-### Income
-
-- B19013_001 (Income \| block group)
+## Income (B19013_001; Income \| census tract)
 
 ```{r}
 #| label: median_income
@@ -288,40 +312,56 @@ col_names <- acs24 |>
 
 dict <- setNames(col_names$var_label, col_names$variable)
 
-## Get ACS dataset of interest
-income_IN <- get_acs(geography = "block group",
-                table = "B19013",
-                year = 2024,
-                state = "Indiana",
-                survey = "acs5") |> 
-  separate_wider_delim(cols = NAME, 
-                       delim = ";", 
-                       names = c("block_group", "census_tract", "county", "state"),
-                       too_few = "error", too_many = "error",
-                       cols_remove = TRUE) |> 
+## Loop through each state and merge the tract data
+income <- map_dfr(states, function(st) {
+  get_acs(geography = "tract",
+          table = "B19013", # Race
+          state = st,
+          year = 2024,
+          geometry = T, 
+          keep_geo_vars = T
+          )
+  },
+  .progress = T) |> 
+  # remove redundant vars
+  dplyr::select(-c(NAME.x, NAME.y, GEOIDFQ, LSAD, STUSPS)) |> 
+  # label intuitively
+  rename(state_fips = STATEFP,
+         county_fips = COUNTYFP,
+         census_tract_fips = TRACTCE,
+         census_tract = NAMELSAD,
+         county = NAMELSADCO,
+         state = STATE_NAME) |>
+  relocate(GEOID, .before = state_fips) |> 
+  relocate(c(state, county), .before = census_tract) |> 
+  relocate(c(ALAND, AWATER), .before = geometry) |> 
   mutate(var_label = recode(variable, !!!dict)) |> 
-  relocate(var_label, .after = variable)
+  relocate(var_label, .after = variable) 
 
-income_CA <- get_acs(geography = "block group",
-                table = "B19013",
-                year = 2024,
-                state = "California",
-                survey = "acs5") |> 
-  separate_wider_delim(cols = NAME, 
-                       delim = ";", 
-                       names = c("block_group", "census_tract", "county", "state"),
-                       too_few = "error", too_many = "error",
-                       cols_remove = TRUE) |> 
-  mutate(var_label = recode(variable, !!!dict)) |> 
-  relocate(var_label, .after = variable)
 
-rm(col_names, dict)
+# ## Save data in .gpkg and as parquet file -- commented out here to run code more easily
+# st_write(income, here("02_outputs", "socioeconomic_data.gpkg"), layer = "income_B19013", append = T)
+# 
+# st_drop_geometry(income) |>
+# write_parquet(here("02_outputs", "income_all.parquet"))
+# 
+# ## Save CA and IN separately
+# st_drop_geometry(income) |>
+#   filter(state == "Indiana") |>
+#   write_parquet(here("02_outputs", "income_IN.parquet"))
+# 
+# st_drop_geometry(income) |>
+#   filter(state == "California") |>
+#   write_parquet(here("02_outputs", "income_CA.parquet"))
+
+
+rm(income, col_names, dict)
 gc()
 ```
 
-### Median age
+## Median age (B01002; Median age by sex \| block group)
 
-- B01002 (Median age by sex \| block group)
+\**Note to self*: add code generalization to other snippets starting here
 
 ```{r}
 #| label: median_age_by_sex
@@ -369,13 +409,16 @@ age_CA <- get_acs(geography = "block group",
   mutate(var_label = recode(variable, !!!dict)) |> 
   relocate(var_label, .after = variable)
 
-rm(col_names, dict)
+
+# write_parquet(age_IN, here("02_outputs", "age_IN.parquet"))
+# write_parquet(age_CA, here("02_outputs", "age_CA.parquet"))
+
+
+rm(age_CA, age_IN, col_names, dict)
 gc()
 ```
 
-### Single family households
-
-- B25001_001 (Housing Units \| block group)
+## Housing Units (B25001_001; Housing Units \| block group)
 
 Another potential dataset is **P16_001N-P16_009N** (Household type) from the Demographic History Sample (DHS) portion of the 2020 Decennial Survey (i.e., variables are things like 'married couple family'; 'non-family households' etc.). If we are looking for data more similar to building type, that exists already in our NSI datasets.
 
@@ -420,15 +463,34 @@ housing_units_CA <- get_acs(geography = "block group",
   mutate(var_label = recode(variable, !!!dict)) |> 
   relocate(var_label, .after = variable)
 
-rm(col_names, dict)
+
+# write_parquet(housing_units_IN, here("02_outputs", "housing_units_IN.parquet"))
+# write_parquet(housing_units_CA, here("02_outputs", "housing_units_CA.parquet"))
+
+
+rm(housing_units_CA, housing_units_IN, col_names, dict)
 gc()
+
+
 ```
 
-### Population density
+## Population density (P1_001N; Total Pop \| census tract)
+
+- I would like clarification on how we want pop. density to be presented
 
 ```{r}
 #| label: population_density
 #| output: true
+
+## total population by census tract
+col_names <- dhc20 |> 
+  filter(str_detect(name, "P1_001N")) |> 
+  mutate(var_label = str_to_title(concept)) |> 
+  subset(select = -c(concept, label)) |> 
+  rename(variable = name)
+
+  
+dict <- setNames(col_names$var_label, col_names$variable)
 
 
 ## Get total population by block for a state
@@ -448,35 +510,48 @@ pop_density <-  total_pop |>
          land_area_sq_mile = ALAND / 2589988) |> 
 ## Calculate population density 
   mutate(pop_density_per_sq_km = value / land_area_sq_km,
-         pop_density_per_sq_mile = value / land_area_sq_mile)
+         pop_density_per_sq_mile = value / land_area_sq_mile) |> 
+  relocate(c(land_area_sq_km, pop_density_per_sq_km), .after = ALAND) |> 
+  relocate(c(land_area_sq_km, pop_density_per_sq_km), .after = ALAND) |>
+  # remove redundant vars
+  dplyr::select(-c(NAME.x, NAME.y, AFFGEOID, LSAD, STUSPS)) |> 
+  # label intuitively
+  rename(state_fips = STATEFP,
+         county_fips = COUNTYFP,
+         census_tract_fips = TRACTCE,
+         census_tract = NAMELSAD,
+         county = NAMELSADCO,
+         state = STATE_NAME) |>
+  relocate(GEOID, .before = state_fips) |> 
+  relocate(c(state, county), .before = census_tract) |> 
+  relocate(c(ALAND, AWATER), .before = geometry) |> 
+  mutate(var_label = recode(variable, !!!dict)) |> 
+  relocate(var_label, .after = variable) 
   
   
-test <- pop_density
+head(pop_density)
 
 
-## total population by census tract
-col_names <- acs24 |> 
-  filter(str_detect(name, "B01003_")) #|> 
-  separate_wider_delim(cols = label, 
-                       delim = "!!", 
-                       names = c("estimate", "var", "var_label"),
-                       too_few = "align_end", too_many = "merge") |> 
-  mutate(var_label = case_when(var_label == "Total:" ~ "Total",
-                               TRUE ~ var_label)) |> 
-  subset(select = -c(concept, estimate, var, geography)) |> 
-  rename(variable = name)
+## Save data in .gpkg and as parquet file -- commented out here to run code more easily
+st_write(pop_density, here("02_outputs", "socioeconomic_data.gpkg"), layer = "pop_density_P1_001N")
 
-  
-dict <- setNames(col_names$var_label, col_names$variable)
+# st_drop_geometry(pop_density) |> 
+#   write_parquet(here("02_outputs", "pop_density_all.parquet"))
 
-############# TRYING SOMETHING HERE #############
-ddhca_pop_groups <- get_pop_groups(2020, 
-                                   sumfile = "ddhca")
+# Save CA and IN separately
+# st_drop_geometry(pop_density) |>
+#   filter(state == "Indiana") |>
+#   write_parquet(here("02_outputs", "pop_density_IN.parquet"))
+# 
+# st_drop_geometry(pop_density) |>
+#   filter(state == "California") |>
+#   write_parquet(here("02_outputs", "pop_density_CA.parquet"))
+
 
 
 ```
 
-### Food deserts
+## Food deserts
 
 Data related to food deserts were downloaded directly from the USDA's website^[2](https://www.ers.usda.gov/data-products/food-access-research-atlas/download-the-data)^. This dataset - 2019 Large Retailer Access Map (LRAM) (formerly known as the Food Access Research Atlas (FARA)) - was last updated 04-27-2021.
 
@@ -505,14 +580,28 @@ FARA_IN <- FARA_subset |>
 FARA_CA <- FARA_subset |> 
   filter(state == "California")
 
+write_parquet(FARA_IN, here("02_outputs", "FARA_IN.parquet"))
+write_parquet(FARA_CA, here("02_outputs", "FARA_CA.parquet"))
+
+
 ```
+
 |  A lot of this data overlaps with ACS data (e.g. race, median income, age, etc.), although I think it may be slightly more outdated. For example, they have census tract population numbers from 2010. While I think it's best for us to use data from the same dataset when we can, I'm wondering if there is a way to balance this food access data with more up-to-date income, age, and population data from ACS without totally biasing analyses.
 | For now, I am just subsetting the portions of the dataset that have to do with access.
 
+## Green space
 
-### Green space
+I found a few data sources for this, but would like opinions on what I should use:
 
-```{r}
+1.  [UN Urban Indicators Database](https://data.unhabitat.org/pages/open-spaces-and-green-areas)
 
-```
-#:::
+2.  [This table of datasets from Georgetown University](https://mdi.georgetown.edu/pbi/greenspace/)
+
+3.  [Green space per capita (m^2^/person) from the EPA](https://www.epa.gov/enviroatlas/enviroatlas-dynamic-data-matrix)
+
+
+
+## Other thoughts
+- Please let me know what you think of my choice in dataset from the census bureau.
+- We want to make sure we have data at the *census tract* spatial scale right?
+

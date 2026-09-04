@@ -17,7 +17,7 @@
 
 # Output files from R CMD check
 /*.Rcheck/
-
+/*.gpkg
 # RStudio files
 .Rproj.user/
 
