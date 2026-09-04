@@ -14,12 +14,14 @@ editor: visual
 library(tidycensus)
 library(tidyverse)
 library(reactable)
+library(sf)
 library(here)
 library(htmlwidgets)
 library(htmltools)
 library(knitr)
 
 
+options(tigris_use_cache = TRUE)
 ```
 
 ## American Community Survey 5-Year Data (2020-2024)
@@ -167,14 +169,31 @@ reactable(dhc20,
 
 From searching the tables above, the following datasets were chosen:
 
-::: panel-tabset
+#::: panel-tabset
 ### Race/ethnicity
 
 - B02001 (Race \| block group)
 
+
 ```{r}
-#| label: race_and_ethnicity
-#| output: true
+#| label: race_and_ethnicity_TEST
+#| output: false
+
+## List of states to iterate through
+states <- state.name
+
+## Loop through each state and merge the tract data
+race_data <- map_dfr(states, function(st) {
+  get_acs(geography = "block group",
+          table = "B02001", # Race
+          state = st,
+          year = 2024,
+          summary_var = "B02001_001",
+          geometry = T, 
+          keep_geo_vars = T
+          )
+  },
+  .progress = T)
 
 ## Create labels for dataset variables
 col_names <- acs24 |> 
@@ -193,19 +212,45 @@ col_names <- acs24 |>
 
 dict <- setNames(col_names$var_label, col_names$variable)
 
-## Get ACS dataset of interest
-race_IN <- get_acs(geography = "block group",
-                table = "B02001",
-                year = 2024,
-                state = "Indiana",
-                survey = "acs5") |> 
+race_data <- race_data |> 
   separate_wider_delim(cols = NAME, 
                        delim = ";", 
                        names = c("block_group", "census_tract", "county", "state"),
                        too_few = "error", too_many = "error",
                        cols_remove = TRUE) |> 
   mutate(var_label = recode(variable, !!!dict)) |> 
-  relocate(var_label, .after = variable)
+  relocate(var_label, .after = variable) |> 
+  mutate(across(everything(), \(x) trimws(x, which = "both"))) |> 
+  filter(var_label != "Total")
+
+
+```
+
+#### Summary Table
+
+#### Map Overview
+```{r}
+race_data |>
+  mutate(percent = 100 * (estimate / summary_estimate)) |>
+  ggplot(aes(fill = percent, colour = )) +
+  facet_wrap(~variable) +
+  geom_sf(color = NA) +
+  theme_void() + 
+  scale_fill_viridis_c() + 
+  labs(fill = "% of population\n(2020 Census)")
+```
+
+```{r}
+#| label: race_and_ethnicity
+#| output: true
+
+
+## Get ACS dataset of interest
+race_IN <- get_acs(geography = "block group",
+                table = "B02001",
+                year = 2024,
+                state = "Indiana",
+                survey = "acs5") 
 
 race_CA <- get_acs(geography = "block group",
                 table = "B02001",
@@ -385,25 +430,89 @@ gc()
 #| label: population_density
 #| output: true
 
+
+## Get total population by block for a state
+total_pop <- get_decennial(
+  geography = "tract",
+  variables = "P1_001N", # Total population variable (2020 Census)
+  state = "Indiana",      
+  year = 2020,
+  geometry = TRUE,
+  keep_geo_vars = TRUE) 
+
+glimpse(total_pop)
+
+pop_density <-  total_pop |> 
+##  Convert ALAND (Square Meters) to sq km or sq mi
+  mutate(land_area_sq_km = ALAND / 1000000,
+         land_area_sq_mile = ALAND / 2589988) |> 
+## Calculate population density 
+  mutate(pop_density_per_sq_km = value / land_area_sq_km,
+         pop_density_per_sq_mile = value / land_area_sq_mile)
+  
+  
+test <- pop_density
+
+
+## total population by census tract
+col_names <- acs24 |> 
+  filter(str_detect(name, "B01003_")) #|> 
+  separate_wider_delim(cols = label, 
+                       delim = "!!", 
+                       names = c("estimate", "var", "var_label"),
+                       too_few = "align_end", too_many = "merge") |> 
+  mutate(var_label = case_when(var_label == "Total:" ~ "Total",
+                               TRUE ~ var_label)) |> 
+  subset(select = -c(concept, estimate, var, geography)) |> 
+  rename(variable = name)
+
+  
+dict <- setNames(col_names$var_label, col_names$variable)
+
+############# TRYING SOMETHING HERE #############
+ddhca_pop_groups <- get_pop_groups(2020, 
+                                   sumfile = "ddhca")
+
+
 ```
 
 ### Food deserts
 
-Data related to food deserts were downloaded directly from the USDA's website^[2](https://www.ers.usda.gov/data-products/food-access-research-atlas/download-the-data)^. This dataset was last updated 04-27-2021.
+Data related to food deserts were downloaded directly from the USDA's website^[2](https://www.ers.usda.gov/data-products/food-access-research-atlas/download-the-data)^. This dataset - 2019 Large Retailer Access Map (LRAM) (formerly known as the Food Access Research Atlas (FARA)) - was last updated 04-27-2021.
 
 ```{r}
 #| label: food_deserts
 #| output: true
+#| warning: false
 
-food_deserts <- read.csv(here("01_data/2019_Food_Access_Research_Atlas_Data", "FARA.csv"), header = T, encoding = "UTF-8")
-readme <- read.csv(here("01_data/2019_Food_Access_Research_Atlas_Data", "ReadMe.csv"))
-var_lookup <- read.csv(here("01_data/2019_Food_Access_Research_Atlas_Data", "VariableLookup.csv"))
+FARA_all <- read.csv(here("01_data/2019_Food_Access_Research_Atlas_Data", "FARA.csv"), header = T, encoding = "UTF-8")
+var_lookup <- read.csv(here("01_data/2019_Food_Access_Research_Atlas_Data", "VariableLookup.csv")) 
+
+FARA_subset <- FARA_all |> 
+  subset(select = c("CensusTract", "County", "State", "Urban", "LowIncomeTracts", "PovertyRate", "LAPOP1_10",
+                    "LAPOP05_10", "LAPOP1_20", "lapop1", "lapophalf", "lapop10", "TractHUNV", "lahunv1", 
+                    "lahunvhalf", "lahunv10", "lahunv20", "LATractsVehicle_20", "LALOWI1_10", "LALOWI05_10", 
+                    "LALOWI1_20", "lalowi1", "lalowihalf", "lalowi10", "lalowi20")) |> 
+  rename(census_tract = CensusTract,
+         county = County, 
+         state = State) |> 
+  mutate(across(c(4:5, 18), as.factor)) |>
+  mutate(across(c(6:17, 19:25), as.integer))
+              
+FARA_IN <- FARA_subset |> 
+  filter(state == "Indiana")
+
+FARA_CA <- FARA_subset |> 
+  filter(state == "California")
 
 ```
+|  A lot of this data overlaps with ACS data (e.g. race, median income, age, etc.), although I think it may be slightly more outdated. For example, they have census tract population numbers from 2010. While I think it's best for us to use data from the same dataset when we can, I'm wondering if there is a way to balance this food access data with more up-to-date income, age, and population data from ACS without totally biasing analyses.
+| For now, I am just subsetting the portions of the dataset that have to do with access.
+
 
 ### Green space
 
 ```{r}
 
 ```
-:::
+#:::
